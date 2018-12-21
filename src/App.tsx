@@ -1,17 +1,16 @@
 import React, { Component } from 'react';
-import styles from './App.module.scss';
 import * as firebase from 'firebase/app';
 import 'firebase/database';
+import { interval, Subscription } from 'rxjs';
+import * as uuid from 'uuid';
 
 
-
-// tmp
 type CardChoice = 'one' | 'two';
+const CARD_CHOICES: CardChoice[] = ['one', 'two'];
 
 interface Member {
   last_seen_at: number;
   display_name: string;
-  unique_key: string;
   card_choice?: CardChoice;
 }
 
@@ -25,6 +24,11 @@ interface Root {
   rooms: {[key in string]: Room};
 }
 
+interface RoomStats {
+  name: string,
+  key: string,
+  activeMemberCount: number,
+}
 
 const config = {
   apiKey: 'AIzaSyA1PFaN-K0s8zgKP4rDL0E5_hvmKvXC5ME\n',
@@ -34,100 +38,161 @@ firebase.initializeApp(config);
 
 interface State {
   currentRoom?: Room;
-  roomAndKeyArray: Array<[Room, string]>;
+  roomStatsArray: Array<RoomStats>;
 }
 class App extends Component<{}, State> {
   constructor(props: {}) {
     super(props);
     this.state = {
-      roomAndKeyArray: [],
+      roomStatsArray: [],
     };
     this.database = firebase.database();
     this.roomsRef = this.database.ref('/rooms');
+    this.myMemberKey = localStorage.getItem('myMemberKey') || uuid.v4();
+    localStorage.setItem('myMemberKey', this.myMemberKey);
 
     this.setupAsync();
   }
 
+  private myMemberKey: string;
   private database: firebase.database.Database;
   private roomsRef: firebase.database.Reference;
   private currentRoomRef?: firebase.database.Reference;
+  private currentRoomLastSeenAtRef?: firebase.database.Reference;
+  private currentRoomMembersRef?: firebase.database.Reference;
+  private currentMyPresenceRef?: firebase.database.Reference;
+
   private serverTimeOffset = 0;
+  private updateLastSeenAtTimerSubscription?: Subscription;
+
+  private getServerTime() {
+    return new Date().getTime() + this.serverTimeOffset;
+  }
 
   async setupAsync(): Promise<void> {
-    const THRESHOLD_OF_INACTIVITY_MSEC = 1000 * 300;
+    const THRESHOLD_OF_INACTIVITY_MSEC = 1000 * 60; // one minute
     this.serverTimeOffset = (await this.database.ref(".info/serverTimeOffset").once('value')).val();
-    const getServerTime = () => (new Date().getTime() + this.serverTimeOffset);
-    this.roomsRef.orderByChild('last_seen_at').startAt(getServerTime() - THRESHOLD_OF_INACTIVITY_MSEC).on('value', snapshot => {
+    this.roomsRef.orderByChild('last_seen_at').startAt(this.getServerTime() - THRESHOLD_OF_INACTIVITY_MSEC).on('value', snapshot => {
       if (snapshot != null) {
         const rooms: Root['rooms'] = (snapshot.toJSON() || {}) as Root['rooms'];
+        const serverTimeWithThresholdOffset = this.getServerTime() - THRESHOLD_OF_INACTIVITY_MSEC;
         this.setState({
-          roomAndKeyArray: Object.keys(rooms)
-            .filter(k => rooms[k].last_seen_at >= getServerTime() - THRESHOLD_OF_INACTIVITY_MSEC)
-            .map(k => [rooms[k], k] as [Room, string])
+          roomStatsArray: Object.keys(rooms)
+            .filter(k => rooms[k].last_seen_at >= serverTimeWithThresholdOffset)
+            .map(k => ({
+              name: rooms[k].name,
+              activeMemberCount: Object.keys(rooms[k].members || {})
+                .map(memberKey => (rooms[k].members![memberKey].last_seen_at >= serverTimeWithThresholdOffset))
+                .length,
+              key: k,
+            } as RoomStats))
         });
       }
     });
   }
 
-  private createRoom(name: string) {
-    const member: Member = {
-      display_name: 'disp',
-      unique_key: 'key',
-      last_seen_at: firebase.database.ServerValue.TIMESTAMP as number,
-    };
-
-    this.roomsRef.push({
-      last_seen_at: firebase.database.ServerValue.TIMESTAMP as number,
+  private async createRoom(name: string) {
+    await this.roomsRef.push({
+      last_seen_at: firebase.database.ServerValue.TIMESTAMP,
       name,
-      members: {
-        hoge: member, fuga: member, piyo: member, aaa: member,
-      },
-    } as Room)
+    } as Room);
   }
 
-  private enterRoom(key: string) {
+  private async enterRoom(key: string) {
     if (this.currentRoomRef && this.currentRoomRef.key === key) {
       return;
     }
 
     console.log(`entering to room  ${key}`);
 
-    this.exitCurrentRoom();
+    await this.leaveCurrentRoom();
     this.currentRoomRef = this.database.ref(`/rooms/${key}`);
+    this.currentRoomLastSeenAtRef = this.currentRoomRef.child('last_seen_at');
+    this.currentRoomMembersRef = this.currentRoomRef.child('members');
+    this.currentMyPresenceRef = this.currentRoomMembersRef.child(this.myMemberKey);
+    await this.currentMyPresenceRef.set({
+      last_seen_at: firebase.database.ServerValue.TIMESTAMP,
+      display_name: 'dispname',
+    } as Member);
     this.currentRoomRef.on('value', snapshot => {
       const room = snapshot!.toJSON() as Room;
       this.setState({currentRoom: room});
     });
+    this.updateLastSeenAtTimerSubscription = interval(5000).subscribe(async () => {
+      await Promise.all([
+        this.currentRoomLastSeenAtRef!.set(firebase.database.ServerValue.TIMESTAMP),
+        this.currentMyPresenceRef!.child('last_seen_at').set(firebase.database.ServerValue.TIMESTAMP),
+      ]);
+    });
+
+    console.log(`entered to room  ${key}`, this.currentRoomRef);
   }
 
-  private exitCurrentRoom() {
+  private async leaveCurrentRoom() {
     console.log(`exiting current room`, this.currentRoomRef);
     if (this.currentRoomRef) {
       console.log(`key=${this.currentRoomRef.key}`);
       this.currentRoomRef.off('value');
       this.currentRoomRef = undefined;
+
+      if (this.updateLastSeenAtTimerSubscription) {
+        this.updateLastSeenAtTimerSubscription.unsubscribe();
+      }
+      await this.currentMyPresenceRef!.remove();
+
+      this.currentRoomLastSeenAtRef = undefined;
+      this.currentRoomMembersRef = undefined;
+      this.currentMyPresenceRef = undefined;
     }
     this.setState({currentRoom: undefined});
+
+    console.log(`exited current room`, this.currentRoomRef);
   }
 
-  private renderExitRoomSection() {
+  private async chooseChard(choice?: CardChoice) {
+    if (choice == null) {
+      await this.currentMyPresenceRef!.child('card_choice').remove();
+    } else {
+      await this.currentMyPresenceRef!.child('card_choice').set(choice);
+    }
+  }
+
+  private renderCurrentRoomSection() {
+    const {currentRoom} = this.state;
+    if (currentRoom == null) {
+      return null;
+    }
+
     return (
       <>
-        {JSON.stringify(this.state.currentRoom)}
-        <button onClick={() => this.exitCurrentRoom()}>leave room</button>
+        <p>{JSON.stringify(this.state.currentRoom)}</p>
+        {Object.keys(currentRoom.members || {}).map(k => (
+          <div key={k}>
+            <p>name: {currentRoom.members![k].display_name}</p>
+            <p>card: {currentRoom.members![k].card_choice}</p>
+          </div>
+        ))}
+        <div>
+          <button onClick={() => this.chooseChard(undefined)}>reset</button>
+          {CARD_CHOICES.map(choice => (<button key={choice} onClick={() => this.chooseChard(choice)}>{choice}</button>))}
+        </div>
+        <button onClick={() => this.leaveCurrentRoom()}>leave room</button>
       </>
     )
   }
 
   render() {
-    const {roomAndKeyArray, currentRoom} = this.state;
+    const {roomStatsArray, currentRoom} = this.state;
+    if (currentRoom) {
+      return this.renderCurrentRoomSection();
+    }
+
     return (
       <>
         <button onClick={() => this.createRoom('name of room')}>add room</button>
-        {roomAndKeyArray.length > 0 ? roomAndKeyArray.map(([room, k]) => (
-          <li key={k} onClick={() => this.enterRoom(k)}>{room.members ? Object.keys(room.members).length : 0}人 {room.name}</li>
+        {roomStatsArray.length > 0 ? roomStatsArray.map(({activeMemberCount, name, key}) => (
+          <li key={key} onClick={() => this.enterRoom(key)}>{activeMemberCount}人 : {name}</li>
         )) : <p>読み込み中…</p>}
-        {currentRoom != null ? this.renderExitRoomSection() : null}
       </>
     );
   }
