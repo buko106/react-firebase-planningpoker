@@ -31,5 +31,10 @@
     "not dead",
     "not ie <= 11",
     "not op_mini all"
-  ]
+  ],
+  "devDependencies": {
+    "@types/react-onsenui": "^2.9.8",
+    "onsenui": "^2.10.6",
+    "react-onsenui": "^1.11.1"
+  }
 }

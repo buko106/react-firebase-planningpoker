@@ -3,7 +3,7 @@ import * as firebase from 'firebase/app';
 import 'firebase/database';
 import { interval, Subscription } from 'rxjs';
 import * as uuid from 'uuid';
-
+import { BackButton, Input, List, ListHeader, ListItem, Navigator, Page, Toolbar } from 'react-onsenui';
 
 type CardChoice = 'one' | 'two';
 const CARD_CHOICES: CardChoice[] = ['one', 'two'];
@@ -185,6 +185,51 @@ class App extends Component<{}, State> {
     )
   }
 
+  renderPage(route: any, navigator?: Navigator) {
+    console.log({route, navigator});
+
+    if (route.pageName === 'rooms') {
+      return (
+        <Page
+          renderToolbar={() => (
+            <Toolbar>
+              <div className="center">Rooms</div>
+            </Toolbar>
+          )}>
+          <List>
+            <ListHeader>Add Room</ListHeader>
+            <ListItem><Input placeholder={'new room name'} value={this.state.newRoomName} onChange={e => this.setState({newRoomName: e.target.value})} /></ListItem>
+            <ListItem onClick={() => this.createRoom(this.state.newRoomName)}>+</ListItem>
+          </List>
+          <List dataSource={this.state.roomStatsArray}
+                renderHeader={() => (<ListHeader>Rooms</ListHeader>)}
+                renderRow={(roomStats: RoomStats) => (
+                  <ListItem onClick={async () => { await this.enterRoom(roomStats.key); navigator!.pushPage({pageName: 'room-detail', roomKey: roomStats.key}); }}>
+                    {roomStats.activeMemberCount} members / {roomStats.name}
+                  </ListItem>
+                )}
+          />
+        </Page>
+      )
+    } else if (route.pageName === 'room-detail') {
+      return (
+        <Page
+          renderToolbar={() => (
+            <Toolbar>
+              <BackButton onClick={() => this.leaveCurrentRoom()}/>
+              <div className="center">Room {this.state.currentRoom!.name}</div>
+            </Toolbar>
+          )}
+        >
+          <List>
+            <ListHeader>Members</ListHeader>
+          </List>
+        </Page>
+      )
+    }
+    return <div>ぺーじがないよ</div>
+  }
+
   render() {
     const {roomStatsArray, currentRoom, myName, newRoomName} = this.state;
     if (currentRoom) {
@@ -207,6 +252,7 @@ class App extends Component<{}, State> {
             <span> {activeMemberCount}人 : {name}</span>
           </li>
         )) : <p>読み込み中…</p>}
+        <Navigator renderPage={(route, navigator) => this.renderPage(route, navigator)} initialRoute={{pageName: 'rooms'}} />
       </>
     );
   }
