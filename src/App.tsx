@@ -39,12 +39,16 @@ firebase.initializeApp(config);
 interface State {
   currentRoom?: Room;
   roomStatsArray: Array<RoomStats>;
+  myName: string;
+  newRoomName: string;
 }
 class App extends Component<{}, State> {
   constructor(props: {}) {
     super(props);
     this.state = {
       roomStatsArray: [],
+      myName: '',
+      newRoomName: '',
     };
     this.database = firebase.database();
     this.roomsRef = this.database.ref('/rooms');
@@ -112,7 +116,7 @@ class App extends Component<{}, State> {
     this.currentMyPresenceRef = this.currentRoomMembersRef.child(this.myMemberKey);
     await this.currentMyPresenceRef.set({
       last_seen_at: firebase.database.ServerValue.TIMESTAMP,
-      display_name: 'dispname',
+      display_name: this.state.myName,
     } as Member);
     this.currentRoomRef.on('value', snapshot => {
       const room = snapshot!.toJSON() as Room;
@@ -165,11 +169,11 @@ class App extends Component<{}, State> {
 
     return (
       <>
-        <p>{JSON.stringify(this.state.currentRoom)}</p>
+        <p>{currentRoom.name}</p>
         {Object.keys(currentRoom.members || {}).map(k => (
           <div key={k}>
-            <p>name: {currentRoom.members![k].display_name}</p>
-            <p>card: {currentRoom.members![k].card_choice}</p>
+            <span>name: {currentRoom.members![k].display_name}</span>
+            <span>     card: {currentRoom.members![k].card_choice}</span>
           </div>
         ))}
         <div>
@@ -182,16 +186,26 @@ class App extends Component<{}, State> {
   }
 
   render() {
-    const {roomStatsArray, currentRoom} = this.state;
+    const {roomStatsArray, currentRoom, myName, newRoomName} = this.state;
     if (currentRoom) {
       return this.renderCurrentRoomSection();
     }
 
     return (
       <>
-        <button onClick={() => this.createRoom('name of room')}>add room</button>
+        <div>
+          <span>my name:</span>
+          <input type="text" value={myName} onChange={(e) => this.setState({myName: e.target.value})} />
+        </div>
+        <div>
+          <input type="text" value={newRoomName} onChange={(e) => this.setState({newRoomName: e.target.value})} />
+          <button onClick={() => this.createRoom(newRoomName || 'default room name')}>add room</button>
+        </div>
         {roomStatsArray.length > 0 ? roomStatsArray.map(({activeMemberCount, name, key}) => (
-          <li key={key} onClick={() => this.enterRoom(key)}>{activeMemberCount}人 : {name}</li>
+          <li key={key}>
+            <button onClick={() => this.enterRoom(key)}>enter</button>
+            <span> {activeMemberCount}人 : {name}</span>
+          </li>
         )) : <p>読み込み中…</p>}
       </>
     );
